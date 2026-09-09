@@ -605,11 +605,11 @@ standing up *during* the spike so the relay row can measure it too.
 This ships to strangers, which changes several decisions that were harmless at two-machine
 scale.
 
-**Audience is Omarchy users, deliberately.** The ringing UI depends on
-`omarchy-launch-floating-terminal-with-presentation` and `gum`; audio assumes PipeWire. Rather
+**Audience is Omarchy users, deliberately.** The ringing UI depends on Omarchy's floating
+terminal and `gum` (and, per §9, on an Omarchy shell plugin); audio assumes PipeWire. Rather
 than build a `RingUi` trait with three implementations to satisfy GNOME and KDE, the project
-stays an Omarchy plugin and the README says so in the first paragraph. Scope choice, not
-oversight.
+ships as an Omarchy plugin plus an AUR package, and the README says so in the first paragraph.
+Scope choice, not oversight.
 
 **The relay default is a release blocker, not a config line.** Shipping pointed at n0's public
 relays means every user's call metadata — who calls whom, and when — traverses infrastructure
@@ -641,3 +641,94 @@ and both end up pasted into bug reports. Either scrub them at the boundary or st
 
 **Licensed MIT.** A public repository with no licence grants nobody the right to use or fork
 it, which silently defeats the point of publishing.
+
+---
+
+## 9. Shipping as an Omarchy plugin
+
+Verified against the plugin docs and against two plugins installed on this machine
+(`io.github.koenhendriks.menu-calculator` and `omamail`).
+
+**Omarchy plugins are QML surfaces for omarchy-shell** — quickshell 0.3.1 — living in
+`~/.config/omarchy/plugins/{id}/` with a `manifest.json`. Kinds are `bar-widget`, `panel`,
+`overlay`, `menu`, `service` and `bar`. A manifest **cannot declare dependencies** and there
+are **no install, update or uninstall hooks**; `omamail` — an email client — ships as pure QML
+plus helper scripts it invokes through `Quickshell.execDetached` and `Process`.
+
+So omacall cannot ship as a plugin alone. **Two artifacts:**
+
+| Artifact | Contains | Installed by |
+|---|---|---|
+| AUR package `omacall` | the Rust binary, `omacall.service` user unit | `pacman`/AUR |
+| Plugin `io.github.kurenn.omacall` | QML frontend, talks to the daemon over the control socket | `omarchy plugin add <git-url> --enable` |
+
+The plugin's `service` entry point detects a missing binary and offers to install it, the same
+way `omarchy-launch-signal` opens an installer when Signal is absent. That is the only
+dependency mechanism available.
+
+### This replaces the ring UI, and it is a real upgrade
+
+The plan's answer/decline prompt spawns a floating terminal running `gum confirm`. With the
+plugin, an incoming call renders as a native QML `overlay` or `panel`, and the contact picker
+becomes a `menu` instead of `gum choose`. The daemon stops spawning terminals and simply emits
+events on the control socket.
+
+The floating-terminal path stays as the fallback for a machine with the binary but no plugin —
+worth keeping, since it is already specified and it makes the daemon usable headless.
+
+This is the third distinct consumer of the control socket, after the CLI and `smoke.sh`. That
+component was the largest hole in the first draft; it is now also the plugin API.
+
+### What stays native
+
+The call window remains a GTK window owned by the Rust binary. Rendering GStreamer into a QML
+surface requires the pipeline and the renderer to live in the *same process*, and the pipeline
+lives in the daemon, not in quickshell. Bar widget, picker and ring prompt are QML; video is
+not.
+
+### Manifest
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "io.github.kurenn.omacall",
+  "name": "omacall",
+  "version": "0.1.0",
+  "author": "Abraham Kuri",
+  "license": "MIT",
+  "description": "Peer-to-peer video calls between machines. No account, no server.",
+  "kinds": ["service", "bar-widget", "menu", "overlay"],
+  "activation": "on-demand",
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml",
+    "menu": "Menu.qml",
+    "overlay": "Ring.qml"
+  },
+  "barWidget": {
+    "displayName": "omacall",
+    "description": "Presence and in-call state; click to call someone.",
+    "category": "Communication",
+    "allowMultiple": false
+  }
+}
+```
+
+The `omarchy.*` id namespace is reserved, so `io.github.kurenn.omacall` it is, and the id must
+match the `moduleName` in every QML entry point.
+
+### Release checklist
+
+- `omarchy plugin validate ~/.config/omacall-plugin` passes.
+- `qmllint -I "$OMARCHY_PATH/shell" BarWidget.qml` is clean (`OMARCHY_PATH=/usr/share/omarchy`).
+- Repo carries `README.md` with install/usage/remove, `LICENSE`, and a `preview.png` for the
+  marketplace.
+- No symlinks anywhere in the plugin folder — validation rejects them.
+- Submit through the marketplace's GitHub issue template.
+
+### Where this lands in the stages
+
+The plugin is **Stage 3** work, alongside packaging, and it needs no change to Stages 1 or 2 —
+the control socket already exists by then and the CLI remains the reference consumer. Building
+the plugin earlier would mean writing QML against a daemon whose event vocabulary is still
+moving.
