@@ -410,9 +410,15 @@ tunnel ports *before* acking a dial, or the first packets vanish.
 **Status: signalling and tunnel demonstrated cross-machine (2026-09-09).** lamini ↔ macOS
 arm64: `omacall call mac` put both ends `in_call` on a direct path with `relay=0`, 150 frames
 decoded through the tunnel at 25.0 fps, and hangup returned both to `idle` with no peers. No
-ssh in the call path and no firewall rules on either machine. Still outstanding for the full
-DoD: the ring UI exercised by a human rather than `OMACALL_AUTOACCEPT`, and the same run
-between two different ISPs.
+ssh in the call path and no firewall rules on either machine. The ring UI has since been
+answered by a human on a local two-daemon call -- notification, ringtone, floating terminal and
+`gum confirm` all worked, and both ends reached `in_call` on a direct path. Still outstanding
+for the full DoD: the same run between two different ISPs.
+
+That local run also showed **four video windows**: two per side (self-view and remote), doubled
+because both endpoints shared a machine. Even two per side is not what the product asks for --
+one window with every participant is §07, and Stage 1 leaves the media pipeline untouched on
+purpose so the transport change can be judged on its own.
 
 **Definition of done.** Two machines on different home ISPs. **sshd stopped on both.** ufw
 active with no omacall rules on either (`ufw status` shows none). Caller runs bash `omacall
