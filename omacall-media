@@ -16,6 +16,9 @@ VPORT=${OMACALL_VPORT:-5000}
 APORT=${OMACALL_APORT:-5002}
 RING_TIMEOUT=${OMACALL_RING_TIMEOUT:-45}
 CONTACTS=${OMACALL_CONTACTS:-$HOME/.config/omacall/contacts}
+# Ports the daemon's tunnel delivers inbound media to. Zero for a loopback
+# selftest, where send and receive must meet on the same port.
+RECV_OFFSET=${OMACALL_RECV_OFFSET:-4}
 
 if [[ $OS == Darwin ]]; then
   VIDEO_SRC=${OMACALL_VIDEO_SRC:-avfvideosrc device-index=0}
@@ -42,19 +45,19 @@ send() {
     ! "video/x-raw,width=${RES%x*},height=${RES#*x}" ! tee name=cam \
     cam. ! queue leaky=downstream max-size-buffers=3 \
     ! vp8enc deadline=1 target-bitrate="$BITRATE" keyframe-max-dist=15 error-resilient=1 \
-    ! rtpvp8pay pt=96 ! udpsink host="$host" port="$VPORT" sync=false \
+    ! rtpvp8pay pt=96 mtu=1120 ! udpsink host="$host" port="$VPORT" sync=false \
     cam. ! queue leaky=downstream max-size-buffers=3 \
     ! videoconvert ! $PREVIEW_SINK sync=false \
     $AUDIO_SRC ! audioconvert ! audioresample ! opusenc \
-    ! rtpopuspay pt=97 ! udpsink host="$host" port="$APORT" sync=false
+    ! rtpopuspay pt=97 mtu=1120 ! udpsink host="$host" port="$APORT" sync=false
 }
 
 recv() {
   # exec: so $! is gst-launch itself, not a subshell that orphans it
   exec gst-launch-1.0 -q \
-    udpsrc port="$VPORT" caps="$VCAPS" ! rtpjitterbuffer latency=120 do-lost=true \
+    udpsrc port="$((VPORT + RECV_OFFSET))" caps="$VCAPS" ! rtpjitterbuffer latency=120 do-lost=true \
     ! rtpvp8depay ! vp8dec ! videoconvert ! autovideosink sync=false \
-    udpsrc port="$APORT" caps="$ACAPS" ! rtpjitterbuffer latency=120 \
+    udpsrc port="$((APORT + RECV_OFFSET))" caps="$ACAPS" ! rtpjitterbuffer latency=120 \
     ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! autoaudiosink sync=false
 }
 
@@ -265,18 +268,20 @@ EOF
 selftest() {
   local s
   PREVIEW_SINK=fakesink # keep the check headless
+  RECV_OFFSET=0         # no tunnel in a loopback check
   send 127.0.0.1 >/dev/null 2>&1 & s=$!
   trap "kill $s 2>/dev/null" EXIT
   local timeout_cmd
   timeout_cmd=$(command -v timeout || command -v gtimeout) # macOS needs coreutils
   if "$timeout_cmd" 25 gst-launch-1.0 -q \
-       udpsrc port="$VPORT" caps="$VCAPS" ! rtpjitterbuffer latency=120 \
+       udpsrc port="$((VPORT + RECV_OFFSET))" caps="$VCAPS" ! rtpjitterbuffer latency=120 \
        ! rtpvp8depay ! vp8dec ! fakesink num-buffers=15; then
     echo "selftest: OK -- ${OMACALL_VIDEO_SRC:-camera}, encoder and RTP transport all work"
   else
     echo "selftest: FAILED -- no frames made the round trip"
     # V4L2 allows a single opener, so a call in progress owns the camera.
-    [[ $OS != Darwin ]] && pgrep -x gst-launch-1.0 >/dev/null &&
+    # Exclude our own sender, or the check reports itself as the culprit.
+    [[ $OS != Darwin ]] && pgrep -x gst-launch-1.0 | grep -qv "^${s}$" &&
       echo "  a call is already running and holds the camera; hang up first"
     # A TCC denial looks exactly like a working pipeline that produces nothing,
     # and the grant belongs to the terminal, not to this script.
