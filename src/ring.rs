@@ -37,6 +37,12 @@ impl Ring {
         let (tx, rx) = oneshot::channel();
         let mut tasks = JoinSet::new();
 
+        // Test-only: answer without a human. Never set this in a real session.
+        if std::env::var("OMACALL_AUTOACCEPT").is_ok_and(|v| v == "1") {
+            let _ = tx.send(true);
+            return (Self { tasks, verdict_file: std::env::temp_dir().join("omacall-autoaccept") }, rx);
+        }
+
         // Unit tests must not pop terminals onto the user's desktop or play
         // a ringtone; the verdict-file mechanism is what they exercise.
         let quiet = cfg!(test) || std::env::var("OMACALL_RING_SILENT").is_ok();

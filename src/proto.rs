@@ -190,6 +190,17 @@ impl CallState {
         matches!(self.state, State::Idle)
     }
 
+    /// What to show a human. Collapsing every non-idle state into "in_call"
+    /// makes a ringing phone indistinguishable from a live call.
+    pub fn state_name(&self) -> &'static str {
+        match self.state {
+            State::Idle => "idle",
+            State::RingingOut { .. } => "ringing_out",
+            State::RingingIn { .. } => "ringing_in",
+            State::InCall { .. } => "in_call",
+        }
+    }
+
     pub fn roster_len(&self) -> usize {
         self.roster.len()
     }
@@ -415,6 +426,22 @@ impl CallState {
             }
 
             (State::InCall { .. }, Event::Hangup) => self.end_call(&mut out),
+
+            // Hanging up while it is still ringing is the common case for a
+            // misdial, and was previously ignored entirely.
+            (State::RingingOut { id, .. }, Event::Hangup) => {
+                out.push(Action::Send { to: *id, msg: Msg::Cancel });
+                self.state = State::Idle;
+                out.push(Action::CallEnded);
+            }
+            (State::RingingIn { from, .. }, Event::Hangup) => {
+                out.push(Action::StopRing);
+                for peer in from {
+                    out.push(Action::Send { to: *peer, msg: Msg::Decline });
+                }
+                self.state = State::Idle;
+                out.push(Action::CallEnded);
+            }
 
             // ---------- catch-alls ----------
             // A stray Accept or Bye arriving after we gave up. Answer Bye and
@@ -647,6 +674,36 @@ mod tests {
         assert!(out.contains(&Action::StopMedia { peer: id(3) }));
         assert!(!out.contains(&Action::CallEnded));
         assert_eq!(s.roster_len(), 1);
+    }
+
+    #[test]
+    fn state_names_distinguish_ringing_from_connected() {
+        let mut s = state(1);
+        assert_eq!(s.state_name(), "idle");
+        s.handle(Event::Dial { id: id(2), name: "them".into() });
+        assert_eq!(s.state_name(), "ringing_out");
+        s.handle(Event::Rx { from: id(2), msg: Msg::Accept { name: "t".into(), video: Codec::Vp8 } });
+        assert_eq!(s.state_name(), "in_call");
+    }
+
+    #[test]
+    fn hangup_while_ringing_out_cancels() {
+        let mut s = state(1);
+        s.handle(Event::Dial { id: id(2), name: "them".into() });
+        let out = s.handle(Event::Hangup);
+        assert!(out.contains(&Action::Send { to: id(2), msg: Msg::Cancel }));
+        assert!(s.is_idle(), "a misdial must be cancellable before it is answered");
+    }
+
+    #[test]
+    fn hangup_while_ringing_in_declines() {
+        let mut s = state(1);
+        s.ring_unknown = true;
+        s.handle(Event::Rx { from: id(2), msg: ring(5) });
+        let out = s.handle(Event::Hangup);
+        assert!(out.contains(&Action::StopRing));
+        assert!(out.contains(&Action::Send { to: id(2), msg: Msg::Decline }));
+        assert!(s.is_idle());
     }
 
     #[test]
