@@ -9,23 +9,23 @@ OS=$(uname -s)
 [[ $OS == Darwin ]] && PATH=/opt/homebrew/bin:$PATH
 
 # Tuning knobs -- cameras and links differ, so these are meant to be turned.
-CAM=${OMARCHY_CALL_CAM:-/dev/video0}
-RES=${OMARCHY_CALL_RES:-1280x720}
-BITRATE=${OMARCHY_CALL_BITRATE:-2000000}
-VPORT=${OMARCHY_CALL_VPORT:-5000}
-APORT=${OMARCHY_CALL_APORT:-5002}
-RING_TIMEOUT=${OMARCHY_CALL_RING_TIMEOUT:-45}
-CONTACTS=${OMARCHY_CALL_CONTACTS:-$HOME/.config/omarchy-call/contacts}
+CAM=${OMACALL_CAM:-/dev/video0}
+RES=${OMACALL_RES:-1280x720}
+BITRATE=${OMACALL_BITRATE:-2000000}
+VPORT=${OMACALL_VPORT:-5000}
+APORT=${OMACALL_APORT:-5002}
+RING_TIMEOUT=${OMACALL_RING_TIMEOUT:-45}
+CONTACTS=${OMACALL_CONTACTS:-$HOME/.config/omacall/contacts}
 
 if [[ $OS == Darwin ]]; then
-  VIDEO_SRC=${OMARCHY_CALL_VIDEO_SRC:-avfvideosrc device-index=0}
-  AUDIO_SRC=${OMARCHY_CALL_AUDIO_SRC:-osxaudiosrc}
+  VIDEO_SRC=${OMACALL_VIDEO_SRC:-avfvideosrc device-index=0}
+  AUDIO_SRC=${OMACALL_AUDIO_SRC:-osxaudiosrc}
 else
-  VIDEO_SRC=${OMARCHY_CALL_VIDEO_SRC:-v4l2src device=$CAM}
-  AUDIO_SRC=${OMARCHY_CALL_AUDIO_SRC:-pipewiresrc}
+  VIDEO_SRC=${OMACALL_VIDEO_SRC:-v4l2src device=$CAM}
+  AUDIO_SRC=${OMACALL_AUDIO_SRC:-pipewiresrc}
 fi
 
-PREVIEW_SINK=${OMARCHY_CALL_PREVIEW_SINK:-autovideosink}
+PREVIEW_SINK=${OMACALL_PREVIEW_SINK:-autovideosink}
 
 VCAPS="application/x-rtp,media=(string)video,encoding-name=(string)VP8,payload=(int)96"
 ACAPS="application/x-rtp,media=(string)audio,encoding-name=(string)OPUS,payload=(int)97,clock-rate=(int)48000,encoding-params=(string)2"
@@ -132,7 +132,7 @@ answer() {
 peers() {
   {
     if command -v avahi-browse >/dev/null; then
-      avahi-browse -tprk _omarchy-call._udp 2>/dev/null |
+      avahi-browse -tprk _omacall._udp 2>/dev/null |
         awk -F';' '$1 == "=" && $3 == "IPv4" { sub(/\.local$/, "", $7); print $7 "\t" $8 }'
     fi
 
@@ -161,9 +161,9 @@ peers() {
 # Publish ourselves on the LAN so other machines see us with no configuration.
 announce() {
   if [[ $OS == Darwin ]]; then
-    exec dns-sd -R "$(hostname -s)" _omarchy-call._udp . "$VPORT"
+    exec dns-sd -R "$(hostname -s)" _omacall._udp . "$VPORT"
   fi
-  exec avahi-publish -s "$(hostname)" _omarchy-call._udp "$VPORT"
+  exec avahi-publish -s "$(hostname)" _omacall._udp "$VPORT"
 }
 
 call() {
@@ -188,7 +188,7 @@ call() {
   # command lives rather than relying on the callee's login shell.
   if ssh -o BatchMode=yes -o ConnectTimeout=10 "$addr" \
        "PATH=\$HOME/.local/bin:/opt/homebrew/bin:\$PATH \
-        omarchy-call --answer \${SSH_CLIENT%% *} $(hostname -s 2>/dev/null || hostname)"; then
+        omacall --answer \${SSH_CLIENT%% *} $(hostname -s 2>/dev/null || hostname)"; then
     talk "$addr" "$name"
   else
     echo "$name did not pick up."
@@ -200,8 +200,8 @@ call() {
 # the call fails completely silently -- packets are dropped before the socket,
 # so the receiver looks healthy and simply never sees a frame.
 setup() {
-  local desktop=$HOME/.local/share/applications/Call.desktop
-  local unit=$HOME/.config/systemd/user/omarchy-call-announce.service
+  local desktop=$HOME/.local/share/applications/Omacall.desktop
+  local unit=$HOME/.config/systemd/user/omacall-announce.service
 
   if [[ $OS == Darwin ]]; then
     echo "macOS: grant Camera and Microphone to the terminal you run this from"
@@ -214,9 +214,9 @@ setup() {
   cat >"$desktop" <<EOF
 [Desktop Entry]
 Version=1.0
-Name=Call
+Name=Omacall
 Comment=Peer-to-peer video call another machine
-Exec=omarchy-launch-floating-terminal-with-presentation omarchy-call
+Exec=omarchy-launch-floating-terminal-with-presentation omacall
 Terminal=false
 Type=Application
 Icon=camera-video
@@ -225,11 +225,11 @@ EOF
 
   cat >"$unit" <<EOF
 [Unit]
-Description=Announce this machine for omarchy-call on the LAN
+Description=Announce this machine for omacall on the LAN
 After=avahi-daemon.service
 
 [Service]
-ExecStart=%h/.local/bin/omarchy-call --announce
+ExecStart=%h/.local/bin/omacall --announce
 Restart=always
 RestartSec=5
 
@@ -240,7 +240,7 @@ EOF
   [[ -f $CONTACTS ]] || printf '# name        host-or-ip\n' >"$CONTACTS"
 
   systemctl --user daemon-reload
-  systemctl --user enable --now omarchy-call-announce.service
+  systemctl --user enable --now omacall-announce.service
   echo "Launcher entry and LAN announcement installed."
 
   # Derive the LAN from the default route rather than hardcoding a subnet.
@@ -272,7 +272,7 @@ selftest() {
   if "$timeout_cmd" 25 gst-launch-1.0 -q \
        udpsrc port="$VPORT" caps="$VCAPS" ! rtpjitterbuffer latency=120 \
        ! rtpvp8depay ! vp8dec ! fakesink num-buffers=15; then
-    echo "selftest: OK -- ${OMARCHY_CALL_VIDEO_SRC:-camera}, encoder and RTP transport all work"
+    echo "selftest: OK -- ${OMACALL_VIDEO_SRC:-camera}, encoder and RTP transport all work"
   else
     echo "selftest: FAILED -- no frames made the round trip"
     # A TCC denial looks exactly like a working pipeline that produces nothing,

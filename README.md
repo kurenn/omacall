@@ -1,4 +1,4 @@
-# omarchy-call
+# omacall
 
 Peer-to-peer video calls between machines. No account, no server, no third party.
 
@@ -8,9 +8,9 @@ automatically; everything else is a line in a contacts file.
 ## Install
 
 ```bash
-curl -o ~/.local/bin/omarchy-call https://raw.githubusercontent.com/kurenn/omarchy-call/main/omarchy-call
-chmod +x ~/.local/bin/omarchy-call
-omarchy-call --setup
+curl -o ~/.local/bin/omacall https://raw.githubusercontent.com/kurenn/omacall/main/omacall
+chmod +x ~/.local/bin/omacall
+omacall --setup
 ```
 
 `--setup` writes the launcher entry, enables LAN announcement, and opens the
@@ -19,9 +19,9 @@ firewall. Do this on **both** machines.
 ## Use
 
 ```bash
-omarchy-call              # pick a machine from a list
-omarchy-call somehost     # call it directly
-omarchy-call --selftest   # check the camera and pipelines
+omacall              # pick a machine from a list
+omacall somehost     # call it directly
+omacall --selftest   # check the camera and pipelines
 ```
 
 The callee gets a notification and an answer/decline prompt. Your own camera
@@ -34,7 +34,7 @@ Three sources, merged, preferring LAN addresses over VPN over anything else:
 
 - **mDNS** on the local network, no configuration at all
 - **Tailscale** peers, if it happens to be running
-- `~/.config/omarchy-call/contacts`, one `name host-or-ip` per line
+- `~/.config/omacall/contacts`, one `name host-or-ip` per line
 
 ## Requirements
 
