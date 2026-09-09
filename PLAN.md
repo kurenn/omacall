@@ -164,7 +164,7 @@ Log at 1Hz: datagrams in/out, `Connection::stats()` (path RTT, lost packets, cwn
 
 | Question | Test | Pass | Fail → reconsider webrtcbin |
 |---|---|---|---|
-| Hole punching between real ISPs | A at home, B on a different ISP. A phone hotspot is a valid and *harder* CGNAT stand-in. Read the reported path type. | Direct path within ~5s on the LAN pair and at least one WAN pair; when direct fails, relay still carries the call | No direct path on any real WAN pair **and** relay can't sustain media |
+| Hole punching between real ISPs | A at home, B on a different ISP. A phone hotspot is a valid and *harder* CGNAT stand-in. **Tailscale must be DOWN on both ends** — iroh enumerates `tailscale0` like any other interface, so a tailnet path would be selected and the run would pass without ever punching. Read the reported path type. | Direct path within ~5s on the LAN pair and at least one WAN pair; when direct fails, relay still carries the call | No direct path on any real WAN pair **and** relay can't sustain media |
 | ↳ **LAN pair: PASSED** | lamini ↔ macOS arm64, real RTP, 20 frames decoded | `paths ip:1 relay:0`, zero size errors at mtu 1120 | — |
 | ↳ **Bottleneck: R1 REPRODUCED** | 1mbit pipe, ~2Mbps offered, no adaptation | — | `send_buf_free` pinned at 259/32768, **zero frames decoded in 35s**. Unshaped baseline decodes 30/30 with the buffer untouched, so it is congestion, not the pipeline |
 | ↳ **Loss 2% and 5%: PASSED** | 640×360 @600k, effective decode rate vs a 30fps source | 30.0 fps clean, **26.3 fps at 2%**, **21.4 fps at 5%** — graceful, no permanent freeze | — |
