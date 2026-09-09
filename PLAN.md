@@ -77,8 +77,50 @@ Checked on the target machine, not assumed.
 - iroh 1.2.0 renamed `NodeId`/`NodeAddr` to **`EndpointId`/`EndpointAddr`**; `EndpointAddr` is
   serde-serializable (`id` + `addrs`), so a ticket is just that struct.
 
+### R1 is real, and the mitigation the plan chose does not work on the VP8 path
+
+Measured in a user+network namespace (`scripts/spike-netem.sh`), so no sudo and no risk of
+shaping leaking onto a real interface.
+
+- **Under a bottleneck, failure is total rather than graceful.** 1mbit pipe, ~2Mbps offered, no
+  adaptation: `datagram_send_buffer_space()` collapses from 32768 to 259 and **nothing decodes
+  at all** in 35 seconds. The unshaped baseline decodes 30/30 with the buffer never leaving
+  32768 and zero loss, which isolates it to congestion. Drop-oldest shreds keyframes, and a VP8
+  stream with no intact keyframe never starts — so the user sees a black window, not bad video.
+- **`send_buf_free` is confirmed as the observable.** It is sensitive, fast and unambiguous.
+  Counting `send_datagram` errors would still have reported zero throughout.
+- **`vp8enc`'s `target-bitrate` is close to useless at `deadline=1`.** At 720p30 it overshoots
+  4.47× at a 400k target, 2.33× at 800k, 1.32× at 1500k, flooring near 1.7Mbps. `end-usage=cbr`
+  changes nothing at all. Keyframe interval is not the cause either — 0.5s to 5.0s moves it only
+  6%.
+
+**What actually moves the bitrate**, measured at a 400k target, 720p30:
+
+| Lever | Result |
+|---|---|
+| `keyframe-max-dist` 15 → 150 | 1787 → 1677 kbps (6%) |
+| `end-usage=cbr` | no change whatsoever |
+| **resolution 720p → 640×360** | **1787 → 569 kbps (3.1×)** |
+| **`deadline` 1 → 1000000** | **1787 → 469 kbps**, i.e. the target is finally honoured |
+
+**This inverts a plan decision.** Stage 2 task 11 says ship bitrate-only AIMD and keep the
+resolution drop behind a flag. On the VP8 fallback path that cannot work: turning
+`target-bitrate` down does essentially nothing, so AIMD would halve a number that changes no
+bytes while the link stays congested. **Resolution and framerate must be AIMD's primary lever
+for VP8**, with `deadline` raised only if the CPU cost is acceptable — `deadline=1` is realtime
+mode and evidently disables libvpx's rate controller.
+
+Hardware H.264 has a real CBR controller and is the preferred path anyway, so this may bite
+only the fallback — but the fallback is what runs on every machine without `gst-plugin-va`, and
+what Stages 1 and 2 use until `vah264enc` is proven.
+
+**Caveat, and a named follow-up:** measured with `videotestsrc`, whose SMPTE pattern is a hard
+case for realtime VP8 — the same encoder produces 48kbps on black frames. Re-measure with the
+C930e and with `vah264enc` before fixing AIMD's constants.
+
 **Still unverified, each resolved by a named task:** whether `vp8enc`'s bitrate is mutable while
-playing (Stage 2 gate 2); whether `vah264enc` negotiates on this VCN (Stage 2 gate 1).
+playing (Stage 2 gate 2); whether `vah264enc` negotiates on this VCN (Stage 2 gate 1); whether
+these ratios hold for real camera content (new, before AIMD tuning).
 
 ## Traps already paid for in v1 — do not rediscover
 
@@ -124,6 +166,7 @@ Log at 1Hz: datagrams in/out, `Connection::stats()` (path RTT, lost packets, cwn
 |---|---|---|---|
 | Hole punching between real ISPs | A at home, B on a different ISP. A phone hotspot is a valid and *harder* CGNAT stand-in. Read the reported path type. | Direct path within ~5s on the LAN pair and at least one WAN pair; when direct fails, relay still carries the call | No direct path on any real WAN pair **and** relay can't sustain media |
 | ↳ **LAN pair: PASSED** | lamini ↔ macOS arm64, real RTP, 20 frames decoded | `paths ip:1 relay:0`, zero size errors at mtu 1120 | — |
+| ↳ **Bottleneck: R1 REPRODUCED** | 1mbit pipe, ~2Mbps offered, no adaptation | — | `send_buf_free` pinned at 259/32768, **zero frames decoded in 35s**. Unshaped baseline decodes 30/30 with the buffer untouched, so it is congestion, not the pipeline |
 | **Bandwidth bottleneck** (the real R1 test) | `tc qdisc ... netem rate 1mbit` with 1.5Mbps offered | Added glass-to-glass latency bounded (< ~500ms), drops observable via `datagram_send_buffer_space()` | Multi-second stale video with no observable signal |
 | Loss tolerance | `netem loss 2% delay 30ms 10ms`, 10 min at 1.5Mbps VP8. Repeat at 5%; also 5% audio-only | 2%: video recovers within a keyframe interval, jitterbuffer holds. 5%: Opus with `inband-fec=true` stays intelligible | Permanent freezes at 2% |
 | Datagram size, **including across a path switch** | Log `max_datagram_size()` on LAN and WAN; force a relay→direct transition mid-flow and log it again. Count size errors at payloader mtu 1400, 1150, 1120 | An mtu ≥1120 exists with zero size errors on the *worst* path, not just the current one | Only tiny datagrams fit even after MTU discovery |
@@ -585,7 +628,7 @@ macOS TCC.
 | R2 | Payloader mtu exceeds `max_datagram_size`, **including after a mid-call path switch** | **Measured**: 1162 at start, 1414 after discovery | `mtu=1120` confirmed with zero size errors; `mtu=1400` provably does not fit at call start; log at call start and warn |
 | R3 | `vah264enc` does not negotiate on this VCN | Stage 2 gate 1, ten minutes | VP8 path is default-on and fully specified; `openh264enc` middle option |
 | R4 | ~~gtkwaylandsink drags in EOL gtk3-rs~~ **Closed by decision** — gtk4paintablesink is primary | — | — |
-| R5 | Live resolution drop breaks encoder renegotiation | Stage 2 task 11 | Bitrate-only AIMD ships; resolution switching behind a flag |
+| R5 | **Inverted by measurement.** `vp8enc` ignores `target-bitrate` at `deadline=1` (4.47× overshoot at 400k), so bitrate-only AIMD cannot rescue a congested VP8 link. Resolution is the only lever that moves bytes (3.1× at 640×360) | Spike, measured | Resolution/framerate becomes AIMD's **primary** lever for VP8, not a flagged extra; live caps renegotiation moves onto the critical path. Re-measure with a real camera and with `vah264enc` first |
 | R6 | Hole punching fails for a real ISP pair | Spike WAN row | Relay fallback *is* the product answer; the real risk is relay media quality |
 | R7 | Public relays throttle under 4.5Mbps mesh upstream | Spike relay row; re-measured at the 3-way DoD | `relay =` override from day one; consider defaulting the AUR example config to the self-hosted relay |
 | R8 | iroh API churn — **downgraded**, iroh is 1.2.0, ordinary semver | `cargo update` | Pin `=1.2.0`; upgrade deliberately at stage boundaries |

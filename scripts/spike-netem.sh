@@ -7,14 +7,22 @@
 #   ./scripts/spike-netem.sh loss5        5% loss
 #   ./scripts/spike-netem.sh clean        remove any qdisc this left behind
 #
-# Shapes the LOOPBACK interface and runs two local spikes, deliberately: shaping
-# enp2s0 would also throttle ssh and every other connection on the box. Loopback
-# hides MTU problems, which is fine here -- MTU was already measured on a real
-# cross-machine path, and what these rows test is congestion behaviour.
+# Runs entirely inside an unprivileged user+network namespace, so it needs no
+# sudo at all: CAP_NET_ADMIN inside the namespace is all tc requires, and the
+# namespace's own loopback is the only interface it can touch. That also means
+# shaping cannot leak onto enp2s0 and throttle ssh, and nothing is left behind
+# if the script dies -- the namespace evaporates with the process.
 #
-# Only the tc calls use sudo, so run this as yourself and let it prompt once.
+# Consequence worth knowing: there is no external network inside, so iroh
+# cannot reach a relay. Connections here are direct over loopback, which is
+# what these rows want. The relay row cannot be run this way.
 
 set -uo pipefail
+
+# Re-exec into a user+network namespace unless we are already in one.
+if [[ -z ${OMACALL_NETNS:-} ]]; then
+  exec unshare -Urn env OMACALL_NETNS=1 "$0" "$@"
+fi
 
 MODE=${1:-}
 IFACE=lo
@@ -27,17 +35,15 @@ LOGDIR=$(mktemp -d)
 cleanup() {
   pkill -x gst-launch-1.0 2>/dev/null
   pkill -x spike 2>/dev/null
-  sudo tc qdisc del dev "$IFACE" root 2>/dev/null
   echo
-  echo "cleaned up (qdisc removed, processes killed)"
+  echo "cleaned up (namespace discarded with its qdisc)"
 }
 trap cleanup EXIT INT TERM
 
 [[ -x $SPIKE ]] || { echo "build first: cargo build --bin spike"; exit 1; }
 
 if [[ $MODE == clean ]]; then
-  sudo tc qdisc del dev "$IFACE" root 2>/dev/null
-  echo "qdisc on $IFACE removed"
+  echo "nothing to clean: shaping lives in a throwaway namespace"
   trap - EXIT
   exit 0
 fi
@@ -50,8 +56,8 @@ loss5)      NETEM=(loss 5%) ;;
 esac
 
 echo "=== $MODE: netem ${NETEM[*]} on $IFACE, offering $((OFFERED_BITRATE / 1000))kbps ==="
-sudo tc qdisc del dev "$IFACE" root 2>/dev/null
-sudo tc qdisc add dev "$IFACE" root netem "${NETEM[@]}" || { echo "tc failed"; exit 1; }
+ip link set "$IFACE" up || { echo "cannot bring $IFACE up"; exit 1; }
+tc qdisc add dev "$IFACE" root netem "${NETEM[@]}" || { echo "tc failed"; exit 1; }
 tc qdisc show dev "$IFACE" | sed 's/^/  /'
 
 OMACALL_PORT_BASE=5100 "$SPIKE" listen > "$LOGDIR/listen.log" 2>&1 &
