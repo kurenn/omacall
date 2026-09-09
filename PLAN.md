@@ -36,8 +36,11 @@ Checked on the target machine, not assumed.
 | Fact | State |
 |---|---|
 | Rust stable 1.97.1 via rustup | working |
-| `gst-plugins-bad-libs` 1.28.6 | installed (source of `gtkwaylandsink`) |
-| `gst-plugins-bad` (the `va` plugin, `vah264enc`) | **NOT installed**; in repos at 1.28.6-2 |
+| `gst-plugins-bad` / `-libs` 1.28.6 | installed |
+| `gst-plugin-gtk` 1.28.6 | installed — owns `gtkwaylandsink` (GTK3) |
+| `gst-plugin-va` (`vah264enc`) | **NOT installed** — it is its OWN package on Arch, not part of `gst-plugins-bad` |
+| VCN H.264 **encode** capability | **confirmed** — `vainfo` lists ConstrainedBaseline/Main/High with `VAEntrypointEncSlice` |
+| `gst-plugin-gtk4` (`gtk4paintablesink`) | in `extra`, not installed |
 | `gst-plugin-gtk4` 0.15.3 | in `extra`, not installed |
 | `compositor`, `glvideomixer`, `waylandsink`, `glimagesink`, `videobox` | present |
 | Logitech C930e | **720p30 only as MJPG**; YUYV 720p caps at 10fps |
@@ -334,8 +337,10 @@ children. This ships on its own.
 
 Gates first, before any media code:
 
-1. `sudo pacman -S gst-plugins-bad libva-utils gst-plugin-gtk4`. `vainfo` must list H.264
-   encode entrypoints for the Barcelo VCN, then
+1. `sudo pacman -S gst-plugin-va gst-plugin-gtk4`. Note `gst-plugin-va` is a **separate Arch
+   package**, not part of `gst-plugins-bad` — installing the latter alone leaves `vah264enc`
+   missing. The VCN's H.264 encode capability is already confirmed via `vainfo`; what remains
+   is whether GStreamer negotiates with it:
    `gst-launch-1.0 videotestsrc num-buffers=100 ! vah264enc ! vah264dec ! fakesink` and a live
    camera loopback. Resolves the plan's biggest stated unknown in ten minutes. If VCN encode
    is broken: VP8-only, `openh264enc` as a middle option, nothing downstream changes.
@@ -409,8 +414,13 @@ tiles anywhere**. (d) `pgrep gst-launch` finds nothing ever again.
 3. `doctor.rs`: key exists and is 0600; relay reachable and which; camera present **and
    advertising MJPG 720p30**; `probe_codecs()` result; plugin inventory; daemon running and in
    a graphical session; a loopback media selftest; the tail of the last call's log.
-4. Packaging: `PKGBUILD` (depends gstreamer, plugins base/good/bad, gst-plugin-gtk4, gum,
-   libnotify — **no firewall hooks of any kind**), `omacall.service` with
+4. Packaging: `PKGBUILD` — `depends` is gstreamer, gst-plugins-base, gst-plugins-good,
+   gst-plugin-gtk4, gum, libnotify. `optdepends` is `gst-plugin-va` for hardware H.264 on
+   AMD/Intel; a machine without it negotiates VP8 and works, which is why VP8 is a mandatory
+   fallback rather than a legacy option — hardware encode is machine-specific (NVIDIA needs
+   `nvenc` from another plugin entirely, a VM has neither). `libva-utils` is a diagnostic and
+   must **not** be a dependency; `doctor` probes through GStreamer's factory lookup.
+   **No firewall hooks of any kind.** `omacall.service` with
    `After=graphical-session.target`, `PartOf=graphical-session.target`,
    `WantedBy=graphical-session.target` — **not** `default.target`, or the daemon starts before
    Wayland exists and the ring UI is dead. `Omacall.desktop`. AUR publish.
