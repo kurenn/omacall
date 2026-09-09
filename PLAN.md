@@ -41,10 +41,9 @@ Checked on the target machine, not assumed.
 | `gst-plugin-va` (`vah264enc`) | **NOT installed** — it is its OWN package on Arch, not part of `gst-plugins-bad` |
 | VCN H.264 **encode** capability | **confirmed** — `vainfo` lists ConstrainedBaseline/Main/High with `VAEntrypointEncSlice` |
 | `gst-plugin-gtk4` (`gtk4paintablesink`) | in `extra`, not installed |
-| `gst-plugin-gtk4` 0.15.3 | in `extra`, not installed |
 | `compositor`, `glvideomixer`, `waylandsink`, `glimagesink`, `videobox` | present |
 | Logitech C930e | **720p30 only as MJPG**; YUYV 720p caps at 10fps |
-| AMD Barcelo iGPU, `/dev/dri/renderD128`, `radeonsi_drv_video.so` | present; `vah264enc` unproven on this VCN |
+| AMD Barcelo iGPU, `/dev/dri/renderD128`, `radeonsi_drv_video.so` | present; hardware encode confirmed, GStreamer negotiation still unproven |
 | PipeWire 1.6.8, `gum`, `notify-send`, `pw-play`, floating-terminal helper, `phone-incoming-call.oga` | present |
 | ufw, sshd | both active |
 | iroh | **1.2.0** — ordinary semver, not pre-1.0 |
