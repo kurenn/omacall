@@ -59,10 +59,18 @@ Checked on the target machine, not assumed.
   `keep_alive_interval` and `max_idle_timeout`. R1's mitigation and the BBR lever are reachable.
   It also exposes `qlog_from_path` behind the `qlog` feature — free per-connection congestion
   and loss traces, and a better instrument than hand-rolled counters for the bottleneck runs.
-- **`max_datagram_size()` is 1162 at connection start**, rising to 1414 after MTU discovery.
-  So payloader `mtu=1120` (+1 tag byte = 1121) fits from the first packet with zero size errors,
-  `mtu=1150` fits with 11 bytes to spare, and v1's default **`mtu=1400` does not fit at all**
-  until discovery completes. This is the measured basis for the Stage 1 bash patch.
+- **`max_datagram_size()` is 1162 at connection start** — identical on loopback and on a real
+  cross-machine LAN path, so it is a protocol-level initial value, not path-dependent. After MTU
+  discovery it has been observed to settle at **1414 on one run and 1192 on another**, which is
+  the concrete argument for fitting the *worst* path rather than the current one. Payloader
+  `mtu=1120` (+1 tag byte = 1121) fits every observed value with zero size errors; v1's default
+  **`mtu=1400` fits none of them at call start**. This is the measured basis for the Stage 1
+  bash patch.
+- **A direct path is selected on the LAN** — `paths ip:1 relay:0`, no relay in the media path,
+  with no configuration. The fast-path requirement is satisfied by the transport, as designed.
+- **`datagram_send_buffer_space()` visibly responds to load** (dipped to 24449 of 32768 under a
+  ~2.1Mbps offered rate, then recovered), so R1's observable works before the bottleneck row
+  ever runs.
 - **Dialing a bare endpoint id fails cold**: "All address lookup services failed or produced no
   results", because pkarr/DNS discovery has not published and propagated yet. A ticket carrying
   addresses connects immediately. Confirms the ticket design rather than bare ids.
@@ -115,6 +123,7 @@ Log at 1Hz: datagrams in/out, `Connection::stats()` (path RTT, lost packets, cwn
 | Question | Test | Pass | Fail → reconsider webrtcbin |
 |---|---|---|---|
 | Hole punching between real ISPs | A at home, B on a different ISP. A phone hotspot is a valid and *harder* CGNAT stand-in. Read the reported path type. | Direct path within ~5s on the LAN pair and at least one WAN pair; when direct fails, relay still carries the call | No direct path on any real WAN pair **and** relay can't sustain media |
+| ↳ **LAN pair: PASSED** | lamini ↔ macOS arm64, real RTP, 20 frames decoded | `paths ip:1 relay:0`, zero size errors at mtu 1120 | — |
 | **Bandwidth bottleneck** (the real R1 test) | `tc qdisc ... netem rate 1mbit` with 1.5Mbps offered | Added glass-to-glass latency bounded (< ~500ms), drops observable via `datagram_send_buffer_space()` | Multi-second stale video with no observable signal |
 | Loss tolerance | `netem loss 2% delay 30ms 10ms`, 10 min at 1.5Mbps VP8. Repeat at 5%; also 5% audio-only | 2%: video recovers within a keyframe interval, jitterbuffer holds. 5%: Opus with `inband-fec=true` stays intelligible | Permanent freezes at 2% |
 | Datagram size, **including across a path switch** | Log `max_datagram_size()` on LAN and WAN; force a relay→direct transition mid-flow and log it again. Count size errors at payloader mtu 1400, 1150, 1120 | An mtu ≥1120 exists with zero size errors on the *worst* path, not just the current one | Only tiny datagrams fit even after MTU discovery |
