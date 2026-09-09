@@ -33,7 +33,7 @@ use std::{
 
 use bytes::Bytes;
 use iroh::{
-    endpoint::{presets, PathId, QuicTransportConfig},
+    endpoint::{presets, QuicTransportConfig},
     Endpoint, EndpointAddr,
 };
 use tokio::net::UdpSocket;
@@ -219,28 +219,44 @@ async fn main() -> anyhow::Result<()> {
         tasks.spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
             let (mut last_out, mut last_in) = (0u64, 0u64);
+            let (mut last_bo, mut last_bi) = (0u64, 0u64);
             loop {
                 tick.tick().await;
                 let out_n = c.dg_out.load(Ordering::Relaxed);
                 let in_n = c.dg_in.load(Ordering::Relaxed);
+                let bo = c.bytes_out.load(Ordering::Relaxed);
+                let bi = c.bytes_in.load(Ordering::Relaxed);
                 let stats = conn.stats();
+
+                // Direct vs relay is what the go/no-go matrix actually reads.
+                let paths = conn.paths();
+                let (n_ip, n_relay) = paths.iter().fold((0, 0), |(i, r), p| {
+                    if p.is_relay() {
+                        (i, r + 1)
+                    } else if p.is_ip() {
+                        (i + 1, r)
+                    } else {
+                        (i, r)
+                    }
+                });
+
                 println!(
-                    "out {:>5}/s  in {:>5}/s  kbps_out {:>6}  mtu {:?}  send_buf_free {:>6}  \
-                     rtt {:>6.1}ms  lost {:>6}  size_err {}  other_err {}",
+                    "out {:>5}/s  in {:>5}/s  kbps_out {:>6}  kbps_in {:>6}  mtu {:?}  \
+                     send_buf_free {:>6}  paths ip:{} relay:{}  lost {:>6}  \
+                     size_err {}  other_err {}",
                     out_n - last_out,
                     in_n - last_in,
-                    (c.bytes_out.load(Ordering::Relaxed) * 8) / 1000,
+                    ((bo - last_bo) * 8) / 1000,
+                    ((bi - last_bi) * 8) / 1000,
                     conn.max_datagram_size(),
                     conn.datagram_send_buffer_space(),
-                    conn.rtt(PathId::ZERO)
-                        .map(|d| d.as_secs_f64() * 1000.0)
-                        .unwrap_or(f64::NAN),
+                    n_ip,
+                    n_relay,
                     stats.lost_packets,
                     c.send_err_size.load(Ordering::Relaxed),
                     c.send_err_other.load(Ordering::Relaxed),
                 );
-                last_out = out_n;
-                last_in = in_n;
+                (last_out, last_in, last_bo, last_bi) = (out_n, in_n, bo, bi);
             }
         });
     }
