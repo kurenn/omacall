@@ -407,6 +407,13 @@ caller's bash `talk` keeps looping on live gst children and sits in a frozen cal
 signal; the callee self-heals via QUIC idle timeout plus `kill_on_drop`. The daemon must bind
 tunnel ports *before* acking a dial, or the first packets vanish.
 
+**Status: signalling and tunnel demonstrated cross-machine (2026-09-09).** lamini ↔ macOS
+arm64: `omacall call mac` put both ends `in_call` on a direct path with `relay=0`, 150 frames
+decoded through the tunnel at 25.0 fps, and hangup returned both to `idle` with no peers. No
+ssh in the call path and no firewall rules on either machine. Still outstanding for the full
+DoD: the ring UI exercised by a human rather than `OMACALL_AUTOACCEPT`, and the same run
+between two different ISPs.
+
 **Definition of done.** Two machines on different home ISPs. **sshd stopped on both.** ufw
 active with no omacall rules on either (`ufw status` shows none). Caller runs bash `omacall
 <name>`; callee hears the ringtone, sees the notification and prompt; Answer gives two-way
