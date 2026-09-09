@@ -168,10 +168,21 @@ Log at 1Hz: datagrams in/out, `Connection::stats()` (path RTT, lost packets, cwn
 | ↳ **LAN pair: PASSED** | lamini ↔ macOS arm64, real RTP, 20 frames decoded | `paths ip:1 relay:0`, zero size errors at mtu 1120 | — |
 | ↳ **Bottleneck: R1 REPRODUCED** | 1mbit pipe, ~2Mbps offered, no adaptation | — | `send_buf_free` pinned at 259/32768, **zero frames decoded in 35s**. Unshaped baseline decodes 30/30 with the buffer untouched, so it is congestion, not the pipeline |
 | ↳ **Loss 2% and 5%: PASSED** | 640×360 @600k, effective decode rate vs a 30fps source | 30.0 fps clean, **26.3 fps at 2%**, **21.4 fps at 5%** — graceful, no permanent freeze | — |
+| ↳ **Relay as media path: PASSED** | `clear_ip_transports()` on both ends forces the fallback a symmetric-NAT pair would land on; lamini ↔ macOS via n0's public relay | `paths ip:0 relay:1`, **26.8 fps**, **zero packets lost**, `send_buf_free` never left 32768 | — |
 | **Bandwidth bottleneck** (the real R1 test) | `tc qdisc ... netem rate 1mbit` with 1.5Mbps offered | Added glass-to-glass latency bounded (< ~500ms), drops observable via `datagram_send_buffer_space()` | Multi-second stale video with no observable signal |
 | Loss tolerance | `netem loss 2% delay 30ms 10ms`, 10 min at 1.5Mbps VP8. Repeat at 5%; also 5% audio-only | 2%: video recovers within a keyframe interval, jitterbuffer holds. 5%: Opus with `inband-fec=true` stays intelligible | Permanent freezes at 2% |
 | Datagram size, **including across a path switch** | Log `max_datagram_size()` on LAN and WAN; force a relay→direct transition mid-flow and log it again. Count size errors at payloader mtu 1400, 1150, 1120 | An mtu ≥1120 exists with zero size errors on the *worst* path, not just the current one | Only tiny datagrams fit even after MTU discovery |
-| Relay as a media path | Force relay, 1.5Mbps for 10 min | Sustained rate, added RTT < 150ms, no growing drop rate | Relay throttles. Test self-hosted `relay.kurice.fyi` before concluding — n0's relays are donated infrastructure and may rate-limit |
+| Relay as a media path | Force relay with `clear_ip_transports()` on both ends | Sustained rate, no growing drop rate | Relay throttles. Test self-hosted `relay.kurice.fyi` before concluding — n0's relays are donated infrastructure and may rate-limit |
+
+**On soaking the public relay.** The matrix originally called for 1.5Mbps for ten minutes.
+Ran 600kbps for thirty seconds instead: pushing megabits through donated infrastructure to
+satisfy our own test is exactly the discourtesy §8 warns about. **Run the full soak against
+`relay.kurice.fyi` once it exists**, not against n0's.
+
+Caveats on the passing result, so nobody over-reads it: 600kbps rather than 1.5Mbps, thirty
+seconds rather than ten minutes, and both endpoints sat on the same LAN, so each had a short
+and similar last mile to the relay. It proves a relay *can* carry a call; it does not
+characterise a bad one.
 | ufw claim | Both machines keep ufw active with **zero** omacall rules; capture `ufw status` | Calls connect anyway: every flow is initiated outbound, so conntrack's ESTABLISHED handling admits the returns | A demonstration, recorded once |
 
 **Why the loss row is not enough — now measured, not argued.** At 2% and 5% loss,
