@@ -52,8 +52,24 @@ Checked on the target machine, not assumed.
 | `gtkwaylandsink` | links `libgtk-3.so.0`; gtk3-rs is archived |
 | `pw-play --loop` | **does not exist** |
 
-**Unverified, resolved by a named task:** whether iroh's `QuicTransportConfig` passes a
-congestion-controller factory through (spike); whether `vp8enc`'s bitrate is mutable while
+**Measured by the spike (2026-09-09), no longer assumptions:**
+
+- `QuicTransportConfigBuilder` exposes **both** `datagram_send_buffer_size` and
+  `congestion_controller_factory`, plus `initial_mtu`, `min_mtu`, `mtu_discovery_config`,
+  `keep_alive_interval` and `max_idle_timeout`. R1's mitigation and the BBR lever are reachable.
+  It also exposes `qlog_from_path` behind the `qlog` feature — free per-connection congestion
+  and loss traces, and a better instrument than hand-rolled counters for the bottleneck runs.
+- **`max_datagram_size()` is 1162 at connection start**, rising to 1414 after MTU discovery.
+  So payloader `mtu=1120` (+1 tag byte = 1121) fits from the first packet with zero size errors,
+  `mtu=1150` fits with 11 bytes to spare, and v1's default **`mtu=1400` does not fit at all**
+  until discovery completes. This is the measured basis for the Stage 1 bash patch.
+- **Dialing a bare endpoint id fails cold**: "All address lookup services failed or produced no
+  results", because pkarr/DNS discovery has not published and propagated yet. A ticket carrying
+  addresses connects immediately. Confirms the ticket design rather than bare ids.
+- iroh 1.2.0 renamed `NodeId`/`NodeAddr` to **`EndpointId`/`EndpointAddr`**; `EndpointAddr` is
+  serde-serializable (`id` + `addrs`), so a ticket is just that struct.
+
+**Still unverified, each resolved by a named task:** whether `vp8enc`'s bitrate is mutable while
 playing (Stage 2 gate 2); whether `vah264enc` negotiates on this VCN (Stage 2 gate 1).
 
 ## Traps already paid for in v1 — do not rediscover
@@ -557,7 +573,7 @@ macOS TCC.
 | # | Risk | Earliest detection | Mitigation |
 |---|---|---|---|
 | R1 | **QUIC congestion control silently drops queued datagrams, oldest first** — it does not return errors, so naive error counting observes nothing while video dies; with a default-sized buffer it first shows up as seconds of stale video | Spike, bottleneck row | Small `datagram_send_buffer_size`; `datagram_send_buffer_space()` as a first-class AIMD input; AIMD keeps offered load under the estimate. BBR is an experimental lever, not the answer. Fail here → webrtcbin exit at ~3 days' cost |
-| R2 | Payloader mtu exceeds `max_datagram_size`, **including after a mid-call path switch** | Spike, size row | `mtu=1120`; fit the worst path, not the current one; log at call start and warn |
+| R2 | Payloader mtu exceeds `max_datagram_size`, **including after a mid-call path switch** | **Measured**: 1162 at start, 1414 after discovery | `mtu=1120` confirmed with zero size errors; `mtu=1400` provably does not fit at call start; log at call start and warn |
 | R3 | `vah264enc` does not negotiate on this VCN | Stage 2 gate 1, ten minutes | VP8 path is default-on and fully specified; `openh264enc` middle option |
 | R4 | ~~gtkwaylandsink drags in EOL gtk3-rs~~ **Closed by decision** — gtk4paintablesink is primary | — | — |
 | R5 | Live resolution drop breaks encoder renegotiation | Stage 2 task 11 | Bitrate-only AIMD ships; resolution switching behind a flag |
