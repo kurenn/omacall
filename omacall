@@ -275,6 +275,9 @@ selftest() {
     echo "selftest: OK -- ${OMACALL_VIDEO_SRC:-camera}, encoder and RTP transport all work"
   else
     echo "selftest: FAILED -- no frames made the round trip"
+    # V4L2 allows a single opener, so a call in progress owns the camera.
+    [[ $OS != Darwin ]] && pgrep -x gst-launch-1.0 >/dev/null &&
+      echo "  a call is already running and holds the camera; hang up first"
     # A TCC denial looks exactly like a working pipeline that produces nothing,
     # and the grant belongs to the terminal, not to this script.
     [[ $OS == Darwin ]] && echo "  on macOS this is usually the camera being blocked:" \
