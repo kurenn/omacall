@@ -79,11 +79,19 @@ async fn main() -> anyhow::Result<()> {
         b.build()
     };
 
-    let endpoint = Endpoint::builder(presets::N0)
+    let mut builder = Endpoint::builder(presets::N0)
         .alpns(vec![ALPN.to_vec()])
-        .transport_config(transport)
-        .bind()
-        .await?;
+        .transport_config(transport);
+
+    // OMACALL_RELAY_ONLY=1 disables direct paths, which is how the matrix's
+    // relay row is run without needing a genuinely hostile NAT: it forces the
+    // same fallback a symmetric-NAT pair would land on.
+    if env::var("OMACALL_RELAY_ONLY").is_ok_and(|v| v == "1") {
+        println!("relay-only mode: direct IP transports cleared");
+        builder = builder.clear_ip_transports();
+    }
+
+    let endpoint = builder.bind().await?;
 
     let conn = match args.get(1).map(String::as_str) {
         Some("listen") => {
