@@ -167,16 +167,19 @@ Log at 1Hz: datagrams in/out, `Connection::stats()` (path RTT, lost packets, cwn
 | Hole punching between real ISPs | A at home, B on a different ISP. A phone hotspot is a valid and *harder* CGNAT stand-in. Read the reported path type. | Direct path within ~5s on the LAN pair and at least one WAN pair; when direct fails, relay still carries the call | No direct path on any real WAN pair **and** relay can't sustain media |
 | ↳ **LAN pair: PASSED** | lamini ↔ macOS arm64, real RTP, 20 frames decoded | `paths ip:1 relay:0`, zero size errors at mtu 1120 | — |
 | ↳ **Bottleneck: R1 REPRODUCED** | 1mbit pipe, ~2Mbps offered, no adaptation | — | `send_buf_free` pinned at 259/32768, **zero frames decoded in 35s**. Unshaped baseline decodes 30/30 with the buffer untouched, so it is congestion, not the pipeline |
+| ↳ **Loss 2% and 5%: PASSED** | 640×360 @600k, effective decode rate vs a 30fps source | 30.0 fps clean, **26.3 fps at 2%**, **21.4 fps at 5%** — graceful, no permanent freeze | — |
 | **Bandwidth bottleneck** (the real R1 test) | `tc qdisc ... netem rate 1mbit` with 1.5Mbps offered | Added glass-to-glass latency bounded (< ~500ms), drops observable via `datagram_send_buffer_space()` | Multi-second stale video with no observable signal |
 | Loss tolerance | `netem loss 2% delay 30ms 10ms`, 10 min at 1.5Mbps VP8. Repeat at 5%; also 5% audio-only | 2%: video recovers within a keyframe interval, jitterbuffer holds. 5%: Opus with `inband-fec=true` stays intelligible | Permanent freezes at 2% |
 | Datagram size, **including across a path switch** | Log `max_datagram_size()` on LAN and WAN; force a relay→direct transition mid-flow and log it again. Count size errors at payloader mtu 1400, 1150, 1120 | An mtu ≥1120 exists with zero size errors on the *worst* path, not just the current one | Only tiny datagrams fit even after MTU discovery |
 | Relay as a media path | Force relay, 1.5Mbps for 10 min | Sustained rate, added RTT < 150ms, no growing drop rate | Relay throttles. Test self-hosted `relay.kurice.fyi` before concluding — n0's relays are donated infrastructure and may rate-limit |
 | ufw claim | Both machines keep ufw active with **zero** omacall rules; capture `ufw status` | Calls connect anyway: every flow is initiated outbound, so conntrack's ESTABLISHED handling admits the returns | A demonstration, recorded once |
 
-**Why the loss row is not enough.** Random 2% loss barely moves BBR and only moderately
-shrinks CUBIC's window. What kills datagram media is a bottleneck *below offered load*.
-Without the rate-limited row, every spike row can pass and R1 still ambushes Stage 2 in the
-field.
+**Why the loss row is not enough — now measured, not argued.** At 2% and 5% loss,
+`send_buf_free` never left 32768 while video degraded gently (30.0 → 26.3 → 21.4 fps). Under a
+bandwidth bottleneck the same observable collapsed to 259 and nothing decoded at all. Loss and
+congestion are different failures with different signatures, and only the bottleneck row finds
+the one that matters. Had the matrix shipped with the loss rows alone, every row would have
+passed and R1 would have surfaced in Stage 2 in the field.
 
 **On the congestion controller.** Quinn's BBR is labelled experimental by its own authors. It
 is a lever worth trying, not the prepared answer. The prepared answer is offered-load control
