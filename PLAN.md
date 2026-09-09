@@ -118,9 +118,28 @@ what Stages 1 and 2 use until `vah264enc` is proven.
 case for realtime VP8 — the same encoder produces 48kbps on black frames. Re-measure with the
 C930e and with `vah264enc` before fixing AIMD's constants.
 
-**Still unverified, each resolved by a named task:** whether `vp8enc`'s bitrate is mutable while
-playing (Stage 2 gate 2); whether `vah264enc` negotiates on this VCN (Stage 2 gate 1); whether
-these ratios hold for real camera content (new, before AIMD tuning).
+### Gates 1 and 2: hardware H.264 works, and it restores bitrate AIMD
+
+Measured after installing `gst-plugin-va`.
+
+- **`vah264enc ! vah264dec` negotiates on the Barcelo VCN.** 100 frames in 1.1s, clean EOS. R3
+  closed.
+- **Hardware H.264 honours its bitrate target**: 1.10× at 400k, 1.04× at 800k, 0.96× at 1500k.
+  Against VP8's 4.47× / 2.33× / 1.32×, that is a different class of behaviour.
+- **`vah264enc`'s `bitrate` is "changeable in NULL, READY, PAUSED or PLAYING state"** — runtime
+  mutable, which is exactly what AIMD needs. `vp8enc`'s `target-bitrate` carries no such
+  annotation.
+
+**This narrows the earlier inversion rather than reversing it.** Bitrate-only AIMD *does* work,
+but only on the hardware H.264 path. On the VP8 fallback the encoder ignores the target, so
+resolution remains the only lever there. So: bitrate AIMD for H.264, resolution AIMD for VP8,
+and the fallback is the harder of the two to get right — which is the opposite of the usual
+assumption that the fallback is the simple case.
+
+**Still unverified:** whether `vp8enc`'s bitrate can be changed mid-stream at all (its property
+lacks the playing-state flag); whether these ratios hold for real camera content rather than
+`videotestsrc` (before any AIMD constant is tuned); and gate 3, which needs `gst-plugin-gtk4`
+installed.
 
 ## Traps already paid for in v1 — do not rediscover
 
@@ -653,9 +672,9 @@ macOS TCC.
 |---|---|---|---|
 | R1 | **QUIC congestion control silently drops queued datagrams, oldest first** — it does not return errors, so naive error counting observes nothing while video dies; with a default-sized buffer it first shows up as seconds of stale video | Spike, bottleneck row | Small `datagram_send_buffer_size`; `datagram_send_buffer_space()` as a first-class AIMD input; AIMD keeps offered load under the estimate. BBR is an experimental lever, not the answer. Fail here → webrtcbin exit at ~3 days' cost |
 | R2 | Payloader mtu exceeds `max_datagram_size`, **including after a mid-call path switch** | **Measured**: 1162 at start, 1414 after discovery | `mtu=1120` confirmed with zero size errors; `mtu=1400` provably does not fit at call start; log at call start and warn |
-| R3 | `vah264enc` does not negotiate on this VCN | Stage 2 gate 1, ten minutes | VP8 path is default-on and fully specified; `openh264enc` middle option |
+| R3 | ~~`vah264enc` does not negotiate on this VCN~~ **Closed**: encodes and decodes cleanly, hits its bitrate target within 10%, and is runtime-mutable | Measured | — |
 | R4 | ~~gtkwaylandsink drags in EOL gtk3-rs~~ **Closed by decision** — gtk4paintablesink is primary | — | — |
-| R5 | **Inverted by measurement.** `vp8enc` ignores `target-bitrate` at `deadline=1` (4.47× overshoot at 400k), so bitrate-only AIMD cannot rescue a congested VP8 link. Resolution is the only lever that moves bytes (3.1× at 640×360) | Spike, measured | Resolution/framerate becomes AIMD's **primary** lever for VP8, not a flagged extra; live caps renegotiation moves onto the critical path. Re-measure with a real camera and with `vah264enc` first |
+| R5 | **Split by measurement.** `vp8enc` ignores `target-bitrate` at `deadline=1` (4.47× overshoot), so resolution is the only lever on the fallback path. `vah264enc` honours it within 10% and is runtime-mutable, so bitrate AIMD works on the hardware path | Spike + Stage 2 gates | Bitrate AIMD for H.264; resolution AIMD for VP8. The fallback is the harder case, not the simpler one. Re-measure both against real camera content before tuning constants |
 | R6 | Hole punching fails for a real ISP pair | Spike WAN row | Relay fallback *is* the product answer; the real risk is relay media quality |
 | R7 | Public relays throttle under 4.5Mbps mesh upstream | Spike relay row; re-measured at the 3-way DoD | `relay =` override from day one; consider defaulting the AUR example config to the self-hosted relay |
 | R8 | iroh API churn — **downgraded**, iroh is 1.2.0, ordinary semver | `cargo update` | Pin `=1.2.0`; upgrade deliberately at stage boundaries |
