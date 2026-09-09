@@ -572,6 +572,7 @@ macOS TCC.
 | R14 | **Aggregator latency versus dynamically added live branches** — stuttering in every call, easily misread as a network fault | Stage 2 gate 4 | `min-upstream-latency=250ms` on compositor and audiomixer |
 | R15 | **Declined invitee retains a join credential** | Protocol review | `PeerJoining` gating; `Ring` while `InCall` is always `Busy` |
 | R16 | **Keyframe-request amplification** — one lossy peer degrades every healthy link | Stage 2 3-way testing | Global 2s `ForceKeyUnit` debounce |
+| R17 | **Public-scale relay dependency** — pointing every installed copy at donated infrastructure is both a sustainability and a single-point-of-failure problem | Before release, not after | §8: choose deliberately; state precisely what a relay observes; never claim "no third parties" |
 
 ---
 
@@ -596,3 +597,47 @@ standing up *during* the spike so the relay row can measure it too.
    bash deleted.
 3. **After Stage 2** — full 4-way, rough CLI ergonomics.
 4. **After Stage 3** — the real release. Stage 4 is garnish, cuttable line by line.
+
+---
+
+## 8. Releasing publicly
+
+This ships to strangers, which changes several decisions that were harmless at two-machine
+scale.
+
+**Audience is Omarchy users, deliberately.** The ringing UI depends on
+`omarchy-launch-floating-terminal-with-presentation` and `gum`; audio assumes PipeWire. Rather
+than build a `RingUi` trait with three implementations to satisfy GNOME and KDE, the project
+stays an Omarchy plugin and the README says so in the first paragraph. Scope choice, not
+oversight.
+
+**The relay default is a release blocker, not a config line.** Shipping pointed at n0's public
+relays means every user's call metadata — who calls whom, and when — traverses infrastructure
+another organisation donates and pays for, and a rate-limit or withdrawal breaks every
+installed copy at once. Before release, pick one:
+
+1. Ask n0 whether they are willing to carry this traffic, and honour the answer.
+2. Default to a project-run relay, accepting the bandwidth cost as the price of shipping.
+3. Ship with **no** default and make the first run ask the user to choose a relay — most
+   honest, worst first-run experience.
+
+Whichever is chosen, the README must state precisely what a relay can observe: NodeIds,
+connection timing, and encrypted bytes it cannot read. Never the phrase "no third parties" —
+it is not true, and the accurate version is defensible on its own.
+
+**Ringing from strangers is an abuse surface.** Anyone holding a ticket can make a machine
+ring, and tickets travel through channels the project does not control. Required before
+release: `ring_unknown` defaults to off for anything not locally discovered, a block list in
+`contacts.toml`, and a per-NodeId ring rate limit so a hostile peer cannot ring in a loop.
+
+**The identity key has no rotation or revocation.** If a key leaks, the only recourse is
+generating a new one and re-sending tickets to every contact. That is an acceptable v2.0
+position for a friends-and-family tool, but it must be documented as a decision rather than
+discovered as a gap.
+
+**Logs carry identifiers.** `tracing` output and `doctor` include NodeIds and contact names,
+and both end up pasted into bug reports. Either scrub them at the boundary or state plainly in
+`doctor`'s header what the output contains.
+
+**Licensed MIT.** A public repository with no licence grants nobody the right to use or fork
+it, which silently defeats the point of publishing.
