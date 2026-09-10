@@ -1,63 +1,60 @@
 # omacall
 
-Peer-to-peer video calls between machines. No account, no server, no third party.
+Peer-to-peer video calls between machines. No account, no server, no third party in
+the media path.
 
-About 200 lines of bash over gstreamer. Machines on the same LAN find each other
-automatically; everything else is a line in a contacts file.
+An Omarchy plugin. Calls go directly between machines over QUIC, encrypted end to
+end, using [iroh](https://github.com/n0-computer/iroh) for identity and NAT
+traversal. When two machines are on the same network the media stays on the LAN;
+when they are not, they hole-punch, and a relay carries the call only if that fails.
 
 ## Install
 
-```bash
-curl -o ~/.local/bin/omacall https://raw.githubusercontent.com/kurenn/omacall/main/omacall
-chmod +x ~/.local/bin/omacall
-omacall --setup
-```
+Needs `gstreamer`, `gst-plugins-base`, `gst-plugins-good`, `gum` and `libnotify`.
+`gst-plugin-va` is optional and gives hardware H.264 on AMD and Intel; without it
+calls run on software VP8.
 
-`--setup` writes the launcher entry, enables LAN announcement, and opens the
-firewall. Do this on **both** machines.
+```
+cargo build --release
+```
 
 ## Use
 
-```bash
-omacall              # pick a machine from a list
-omacall somehost     # call it directly
-omacall --selftest   # check the camera and pipelines
+```
+omacall daemon            # normally started by omacall.service
+omacall id                # your identity
+omacall add NAME TICKET   # save someone
+omacall call NAME
+omacall status            # what the daemon is doing, as JSON
+omacall hangup
 ```
 
-The callee gets a notification and an answer/decline prompt. Your own camera
-appears immediately; theirs appears when they connect. Close a video window to
-hang up.
+Send someone your ticket over any channel you already trust. They save it, and from
+then on the name is enough — the identity is a key, not an address, so it survives
+your machine moving networks.
 
-## How machines are found
+## How it works
 
-Three sources, merged, preferring LAN addresses over VPN over anything else:
+A resident daemon holds the identity key and one iroh endpoint, keeping a
+connection to a relay so the machine is reachable without port forwarding and
+without sshd. Everything else — the CLI, the shell plugin, the tests — talks to it
+over a control socket.
 
-- **mDNS** on the local network, no configuration at all
-- **Tailscale** peers, if it happens to be running
-- `~/.config/omacall/contacts`, one `name host-or-ip` per line
+Media is one gstreamer pipeline per call: your camera, the encoder, a compositor
+mixing every participant into **one window**, and a branch per peer. RTP leaves
+through an appsink straight onto QUIC datagrams and arrives at an appsrc, so there
+is no loopback hop and no port to open. Full mesh, capped at four people, because
+the ceiling is upstream bandwidth rather than CPU.
 
-## Requirements
+## What it does not do
 
-Linux: gstreamer (base + good), pipewire, avahi, `gum`, `jq`, and `sshd` running
-on the callee. macOS: `brew install gstreamer coreutils`.
+- No NAT traversal without a rendezvous. Two machines behind different routers need
+  a relay to introduce them; that is what NAT is, not a shortcoming to engineer
+  around. The relay sees encrypted bytes and public keys, never content, and only
+  when hole punching fails.
+- No echo cancellation yet. Use headphones, or enable PipeWire's
+  `module-echo-cancel`.
+- Four participants maximum.
 
-## Gotchas
-
-**A firewall drops this silently.** The receiver binds fine, reports no error and
-never sees a frame. `--setup` opens UDP 5000-5002; if you skip it and calls stay
-black, that is why.
-
-**macOS grants the camera to the terminal, not the script.** Run it from a
-terminal that has Camera and Microphone access under System Settings > Privacy &
-Security. A process started over ssh can never get that grant, so it produces
-zero frames with no error at all.
-
-## Limits
-
-- LAN or VPN only. No NAT traversal, so two machines behind different home
-  routers need a VPN, a port forward, or something like Jami instead.
-- Media is not encrypted. Fine on a LAN or over Tailscale; do not port-forward
-  it to the open internet as-is.
-- No echo cancellation. Wear headphones, or load pipewire's `module-echo-cancel`.
-- A Mac can place calls but cannot be rung: crossing macOS's session boundary
-  from ssh needs root.
+`PLAN.md` has the architecture, the measurements behind each decision, and the
+things that are still open.

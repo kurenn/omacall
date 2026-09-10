@@ -13,17 +13,19 @@ use iroh::{
     Endpoint, EndpointId,
 };
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    process::{Child, Command},
+    io::AsyncReadExt,
     sync::{mpsc, oneshot},
 };
+
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::{
     contacts::Contacts,
     identity, ipc,
+    media::session::MediaSession,
     proto::{self, Action, CallState, Codec, Event, Msg, RING_TIMEOUT_SECS},
     ring::{self, Ring},
-    tunnel::Tunnel,
 };
 
 pub const ALPN: &[u8] = b"omacall/0";
@@ -45,13 +47,31 @@ enum Ev {
 struct PeerConn {
     conn: Connection,
     send: SendStream,
-    tunnel: Option<Tunnel>,
-    /// The bash media pipeline. Owned, in its own process group, killed on
-    /// drop -- v1 orphaned these and they transmitted forever.
-    child: Option<Child>,
+    /// Pumps this peer's inbound datagrams into the media session.
+    pump: Option<tokio::task::JoinHandle<()>>,
 }
 
-pub async fn run(port_base: u16) -> Result<()> {
+impl Drop for PeerConn {
+    fn drop(&mut self) {
+        if let Some(p) = self.pump.take() {
+            p.abort();
+        }
+    }
+}
+
+/// Which sources the media pipeline uses. Overridable so tests and headless
+/// runs can avoid the camera: V4L2 allows one opener, so grabbing it would
+/// fight a real call.
+fn media_sources() -> (String, String, String) {
+    (
+        std::env::var("OMACALL_VIDEO_SRC")
+            .unwrap_or_else(|_| "v4l2src device=/dev/video0 ! image/jpeg,width=1280,height=720,framerate=30/1 ! jpegdec".into()),
+        std::env::var("OMACALL_AUDIO_SRC").unwrap_or_else(|_| "pipewiresrc".into()),
+        std::env::var("OMACALL_SINK").unwrap_or_else(|_| "waylandsink".into()),
+    )
+}
+
+pub async fn run(_port_base: u16) -> Result<()> {
     let key_path = identity::key_path();
     let secret = identity::load_or_create(&key_path)?;
     if let Err(e) = identity::check_permissions(&key_path) {
@@ -122,6 +142,7 @@ pub async fn run(port_base: u16) -> Result<()> {
     state.ring_unknown = true; // Stage 1: LAN-first, tighten in Stage 3
     let mut peers: HashMap<EndpointId, PeerConn> = HashMap::new();
     let mut ring: Option<Ring> = None;
+    let mut media: Option<Arc<Mutex<MediaSession>>> = None;
     // Reloaded whenever it matters: `omacall add` writes the file directly, so
     // a daemon holding a startup snapshot would never see a new contact.
     let mut contacts = contacts;
@@ -144,7 +165,7 @@ pub async fn run(port_base: u16) -> Result<()> {
                 }
             }
             Ev::Ipc(req, reply) => {
-                let (resp, evs) = handle_ipc(req, &state, &peers, &contacts, me).await;
+                let (resp, evs) = handle_ipc(req, &state, &peers, &contacts, me, &media).await;
                 let _ = reply.send(resp);
                 let mut acc = Vec::new();
                 for e in evs {
@@ -164,7 +185,7 @@ pub async fn run(port_base: u16) -> Result<()> {
                         continue;
                     }
                 };
-                peers.insert(from, PeerConn { conn: conn.clone(), send, tunnel: None, child: None });
+                peers.insert(from, PeerConn { conn: conn.clone(), send, pump: None });
                 spawn_reader(from, recv, conn, ev_tx.clone());
                 state.handle(Event::Rx { from, msg })
             }
@@ -184,7 +205,7 @@ pub async fn run(port_base: u16) -> Result<()> {
         };
 
         for action in actions {
-            apply(action, &mut peers, &mut ring, &ev_tx, port_base, &contacts).await;
+            apply(action, &mut peers, &mut ring, &mut media, &ev_tx, &contacts).await;
         }
     }
     Ok(())
@@ -196,6 +217,7 @@ async fn handle_ipc(
     peers: &HashMap<EndpointId, PeerConn>,
     contacts: &Contacts,
     me: EndpointId,
+    media: &Option<Arc<Mutex<MediaSession>>>,
 ) -> (ipc::Response, Vec<Event>) {
     match req {
         ipc::Request::Status => {
@@ -212,9 +234,17 @@ async fn handle_ipc(
                         status.paths_direct += 1;
                     }
                 }
+                let name = contacts.name_of(id).unwrap_or("unknown").to_string();
+                // Decoded frames, not datagrams: a caps typo or a dead decoder
+                // sails straight past a datagram counter.
+                let frames_decoded = match media {
+                    Some(m) => m.lock().await.frames_decoded(&id.to_string()),
+                    None => 0,
+                };
                 status.peers.push(ipc::PeerStatus {
-                    name: contacts.name_of(id).unwrap_or("unknown").to_string(),
+                    name,
                     id: id.to_string(),
+                    frames_decoded,
                     ..Default::default()
                 });
             }
@@ -255,7 +285,7 @@ async fn dial(
         .with_context(|| format!("could not reach {name}"))?;
     let (send, recv) = conn.open_bi().await.context("opening the control stream")?;
     let id = conn.remote_id();
-    peers.insert(id, PeerConn { conn: conn.clone(), send, tunnel: None, child: None });
+    peers.insert(id, PeerConn { conn: conn.clone(), send, pump: None });
     spawn_reader(id, recv, conn, ev_tx.clone());
     Ok(id)
 }
@@ -264,8 +294,8 @@ async fn apply(
     action: Action,
     peers: &mut HashMap<EndpointId, PeerConn>,
     ring: &mut Option<Ring>,
+    media: &mut Option<Arc<Mutex<MediaSession>>>,
     ev_tx: &mpsc::Sender<Ev>,
-    port_base: u16,
     contacts: &Contacts,
 ) {
     match action {
@@ -292,57 +322,95 @@ async fn apply(
             });
         }
         Action::StopRing => *ring = None,
-        Action::StartMedia { peer, .. } => {
-            let Some(p) = peers.get_mut(&peer) else { return };
-            match Tunnel::start(p.conn.clone(), port_base).await {
-                Ok(t) => p.tunnel = Some(t),
-                Err(e) => {
-                    tracing::error!("tunnel failed: {e}");
-                    return;
+        Action::StartMedia { peer, codec } => {
+            // Key media by endpoint id, never by contact name: an unknown
+            // caller has no name, two contacts could share one, and a rename
+            // mid-call would orphan the branch.
+            let key = peer.to_string();
+            let name = contacts.name_of(&peer).unwrap_or("someone").to_string();
+
+            // One session per call; a second peer joins the existing one.
+            if media.is_none() {
+                let (v, a, sink) = media_sources();
+                match MediaSession::new(&v, &a, &sink, codec) {
+                    Ok((session, mut rx)) => {
+                        if let Err(e) = session.start() {
+                            tracing::error!("media failed to start: {e}");
+                            return;
+                        }
+                        let session = Arc::new(Mutex::new(session));
+                        *media = Some(session.clone());
+
+                        // Encoded RTP goes to every peer: encode once, fan out.
+                        let conns: Vec<Connection> =
+                            peers.values().map(|p| p.conn.clone()).collect();
+                        tokio::spawn(async move {
+                            while let Some((tag, payload)) = rx.recv().await {
+                                let mut framed = Vec::with_capacity(payload.len() + 1);
+                                framed.push(tag);
+                                framed.extend_from_slice(&payload);
+                                let bytes = bytes::Bytes::from(framed);
+                                for c in &conns {
+                                    // A refused datagram is a dropped frame,
+                                    // never a dropped call.
+                                    let _ = c.send_datagram(bytes.clone());
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("media failed to build: {e}");
+                        return;
+                    }
                 }
             }
-            let name = contacts.name_of(&peer).unwrap_or("peer").to_string();
-            p.child = spawn_media(&name);
+
+            let Some(session) = media.clone() else { return };
+            if let Err(e) = session.lock().await.add_peer(&key) {
+                tracing::error!("adding {name} to the call window failed: {e}");
+                return;
+            }
+
+            if let Some(p) = peers.get_mut(&peer) {
+                let conn = p.conn.clone();
+                let who = key.clone();
+                let s = session.clone();
+                p.pump = Some(tokio::spawn(async move {
+                    loop {
+                        let Ok(dg) = conn.read_datagram().await else { return };
+                        let Some((&tag, body)) = dg.split_first() else { continue };
+                        s.lock().await.push(&who, tag, body);
+                    }
+                }));
+            }
             ring::notify("In call", &format!("with {name}"));
         }
         Action::StopMedia { peer } => {
+            let key = peer.to_string();
             if let Some(p) = peers.get_mut(&peer) {
-                p.tunnel = None;
-                if let Some(mut c) = p.child.take() {
-                    let _ = c.kill().await;
+                if let Some(pump) = p.pump.take() {
+                    pump.abort();
+                }
+            }
+            if let Some(session) = media.clone() {
+                let mut s = session.lock().await;
+                let _ = s.remove_peer(&key);
+                if s.peer_count() == 0 {
+                    let _ = s.stop();
+                    drop(s);
+                    *media = None;
                 }
             }
         }
         Action::Notify { title, body } => ring::notify(&title, &body),
-        Action::DialRoster { .. } => tracing::debug!("mesh join arrives in Stage 2"),
+        Action::DialRoster { .. } => tracing::debug!("mesh join arrives with Stage 2 signalling"),
         Action::CallEnded => {
-            for (_, p) in peers.iter_mut() {
-                p.tunnel = None;
-                if let Some(mut c) = p.child.take() {
-                    let _ = c.kill().await;
-                }
+            if let Some(session) = media.take() {
+                let _ = session.lock().await.stop();
             }
             peers.clear();
         }
     }
-}
-
-/// Start the media pipeline. Stage 1 shells out to v1's bash script; Stage 2
-/// replaces this with in-process gstreamer.
-///
-/// Unset `OMACALL_MEDIA_CMD` means the daemon runs the call without media, so
-/// signalling can be exercised on its own -- which is how the first end-to-end
-/// test is run.
-fn spawn_media(peer_name: &str) -> Option<Child> {
-    let cmd = std::env::var("OMACALL_MEDIA_CMD").ok()?;
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!("{cmd} {peer_name}"))
-        .kill_on_drop(true)
-        .process_group(0) // its own group, so hangup kills the whole pipeline
-        .spawn()
-        .map_err(|e| tracing::error!("media command failed to start: {e}"))
-        .ok()
 }
 
 fn spawn_reader(from: EndpointId, mut recv: RecvStream, conn: Connection, tx: mpsc::Sender<Ev>) {

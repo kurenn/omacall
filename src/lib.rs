@@ -5,4 +5,3 @@ pub mod ipc;
 pub mod media;
 pub mod proto;
 pub mod ring;
-pub mod tunnel;
