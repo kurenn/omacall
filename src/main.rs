@@ -33,6 +33,8 @@ enum Cmd {
     Hangup,
     /// What the daemon is doing, as JSON.
     Status,
+    /// Check this machine for the things that fail silently.
+    Doctor,
 }
 
 #[tokio::main]
@@ -66,6 +68,17 @@ async fn main() -> Result<()> {
         }
         Some(Cmd::Call { name }) => send(ipc::Request::Dial { name }).await,
         Some(Cmd::Hangup) => send(ipc::Request::Hangup).await,
+        Some(Cmd::Doctor) => {
+            let report = omacall::doctor::run().await;
+            let bad = report.iter().filter(|h| h.is_bad()).count();
+            for line in &report {
+                println!("{line}");
+            }
+            if bad > 0 {
+                anyhow::bail!("{bad} problem(s) would stop a call working");
+            }
+            Ok(())
+        }
         Some(Cmd::Status) | None => send(ipc::Request::Status).await,
     }
 }
