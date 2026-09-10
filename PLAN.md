@@ -690,6 +690,16 @@ macOS TCC.
 
 ---
 
+## Progress
+
+| Stage | State |
+|---|---|
+| 0. Spike | 6 of 7 rows closed. R1 measured and the AIMD design corrected. Open: hole punching between two real ISPs, which needs Tailscale **down** on both ends or iroh picks the tailnet and the row passes without testing anything |
+| 1. Transport tunnel | **Done and superseded.** Demonstrated cross-machine with a human answering, then dissolved by Stage 2 |
+| 2. Media in process | **Mostly done.** One window compositing every participant, appsink/appsrc replacing the loopback hop, hardware H.264 with VP8 fallback, split AIMD, decoded-frame counters, smoke gate. Open: mesh join wiring in the daemon, and the keyframe-request debounce |
+| 3. Ergonomics | **Mostly done.** Contacts with address hints, picker with a first-run empty state, doctor, AUR package, user unit, Omarchy plugin. Open: trust-on-first-use save and presence pings |
+| 4. Polish | Echo-cancel detection lives in doctor; the relayed-path indicator is in status and the bar widget. Open: self-hosted relay docs, macOS window sink |
+
 ## 7. Sequencing
 
 **Serial spine:** spike → control socket → identity/endpoint → tunnel → ring → daemon/call →
