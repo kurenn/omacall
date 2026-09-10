@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.kurenn.omacall",
+  "name": "omacall",
+  "version": "0.1.0",
+  "author": "Abraham Kuri",
+  "license": "MIT",
+  "homepage": "https://github.com/kurenn/omacall",
+  "description": "Peer-to-peer video calls between machines. No account, no server, and no third party in the media path. Shows who is reachable, rings you when someone calls, and puts everyone in one window.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "omacall",
+    "description": "Call state in the bar; click to place a call.",
+    "category": "Communication",
+    "allowMultiple": false,
+    "aliases": [
+      "call",
+      "video",
+      "omacall"
+    ]
+  }
+}

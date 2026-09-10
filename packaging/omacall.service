@@ -1,0 +1,17 @@
+[Unit]
+Description=omacall — peer-to-peer video calls
+Documentation=https://github.com/kurenn/omacall
+# graphical-session.target, not default.target: the daemon shows the incoming
+# call prompt, so starting before the Wayland session exists leaves it unable
+# to ring anyone, silently.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/omacall daemon
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

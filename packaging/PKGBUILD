@@ -1,0 +1,37 @@
+# Maintainer: Abraham Kuri <abkuri88@gmail.com>
+pkgname=omacall
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Peer-to-peer video calls between machines. No account, no server."
+arch=('x86_64' 'aarch64')
+url="https://github.com/kurenn/omacall"
+license=('MIT')
+# gst-plugin-va is deliberately optional: hardware encode is a property of the
+# machine, not of the package, and VP8 is the universal fallback.
+depends=('gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'gum' 'libnotify' 'pipewire')
+optdepends=(
+  'gst-plugin-va: hardware H.264 encoding on AMD and Intel'
+  'v4l-utils: lets `omacall doctor` check the camera can do 720p30'
+)
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgname-$pkgver"
+  cargo build --release --locked
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  cargo test --release --locked --lib
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "target/release/omacall" "$pkgdir/usr/bin/omacall"
+  install -Dm644 "packaging/omacall.service" "$pkgdir/usr/lib/systemd/user/omacall.service"
+  install -Dm644 "packaging/Omacall.desktop" "$pkgdir/usr/share/applications/Omacall.desktop"
+  install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
